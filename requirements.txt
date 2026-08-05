@@ -1,0 +1,38 @@
+# Bilibili Video Downloader — core dependencies
+
+# Python 3.12+
+
+
+
+# GUI
+
+PySide6>=6.6.0
+
+
+
+# Download engine
+
+yt-dlp>=2024.1.0
+
+
+
+# Network & images
+
+requests>=2.31.0
+
+Pillow>=10.0.0
+
+
+
+# SSL certificates (Windows python.org installs + HTTPS downloads)
+
+certifi>=2023.7.22
+
+truststore>=0.10.0
+
+
+
+# Packaging (optional, for building EXE)
+
+pyinstaller>=6.3.0
+

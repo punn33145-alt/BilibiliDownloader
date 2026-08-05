@@ -1,0 +1,8 @@
+# Optional — speech recognition subtitle generation (ASR fallback)
+
+# Install only if you want AI-generated Chinese subtitles when official ones are unavailable.
+
+faster-whisper>=1.0.0
+
+# Optional alternative ASR engine (uncomment to use SenseVoice instead of / alongside Whisper):
+# funasr>=1.0.0

@@ -1,0 +1,26 @@
+# Optional — offline subtitle translation (Module 2)
+
+# Install only if you want Chinese → Vietnamese subtitle translation.
+
+
+
+transformers>=4.36.0
+
+sentencepiece>=0.1.99
+
+torch>=2.1.0
+
+safetensors>=0.4.0
+
+tokenizers>=0.15.0
+
+huggingface-hub>=0.20.0
+
+
+
+# SSL (also in requirements.txt; needed for first-time model download)
+
+certifi>=2023.7.22
+
+truststore>=0.10.0
+
