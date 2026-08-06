@@ -33,6 +33,16 @@ logger = logging.getLogger(__name__)
 StatusCallback = Callable[[str], None]
 
 _MODEL_CANDIDATES: tuple[dict[str, Any], ...] = (
+    # MarianMT is far smaller/faster than NLLB-200 on CPU (no GPU
+    # acceleration), so it's tried first. Falls back to the larger,
+    # generally higher-quality models below if it's unavailable.
+    {
+        "label": "MarianMT",
+        "model_id": "Helsinki-NLP/opus-mt-zh-vi",
+        "backend": "marian",
+        "src_lang": None,
+        "tgt_lang": None,
+    },
     {
         "label": "Meta NLLB-200",
         "model_id": "facebook/nllb-200-distilled-600M",
@@ -46,13 +56,6 @@ _MODEL_CANDIDATES: tuple[dict[str, Any], ...] = (
         "backend": "m2m100",
         "src_lang": "zh",
         "tgt_lang": "vi",
-    },
-    {
-        "label": "MarianMT",
-        "model_id": "Helsinki-NLP/opus-mt-zh-vi",
-        "backend": "marian",
-        "src_lang": None,
-        "tgt_lang": None,
     },
     {
         "label": "Facebook M2M100 (1.2B fallback)",
