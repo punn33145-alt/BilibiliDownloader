@@ -66,7 +66,7 @@ _MODEL_CANDIDATES: tuple[dict[str, Any], ...] = (
     },
 )
 
-_BATCH_SIZE = 8
+_BATCH_SIZE = 16
 _MAX_BLOCK_CHARS = 512
 
 

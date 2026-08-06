@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 import logging
+import os
 from pathlib import Path
 from typing import Optional
 
@@ -21,6 +22,7 @@ class WhisperEngine(SpeechRecognitionEngine):
     def __init__(self, model_size: str = "base") -> None:
         self._model_size = model_size
         self._model = None
+        self._batched_model = None
 
     @property
     def name(self) -> str:
@@ -39,19 +41,35 @@ class WhisperEngine(SpeechRecognitionEngine):
 
         self._notify(progress_callback, f"Loading Whisper model ({self._model_size})...")
         if self._model is None:
+            # int8 is much faster than float32 on CPU (no GPU acceleration
+            # available here), at a small accuracy cost. cpu_threads pins
+            # CTranslate2 to use all logical cores instead of its default,
+            # which can under-use multi-core machines.
+            cpu_threads = os.cpu_count() or 4
             self._model = WhisperModel(
                 self._model_size,
                 device="auto",
-                compute_type="auto",
+                compute_type="int8",
+                cpu_threads=cpu_threads,
                 download_root=str(get_models_dir()),
             )
 
+        transcriber = self._get_transcriber()
+
         self._notify(progress_callback, "Transcribing audio (Whisper)...")
-        segments, _info = self._model.transcribe(
-            str(audio_path),
-            language="zh",
-            vad_filter=True,
-        )
+        if self._batched_model is not None:
+            segments, _info = transcriber.transcribe(
+                str(audio_path),
+                language="zh",
+                vad_filter=True,
+                batch_size=8,
+            )
+        else:
+            segments, _info = transcriber.transcribe(
+                str(audio_path),
+                language="zh",
+                vad_filter=True,
+            )
 
         cues: list[SubtitleCue] = []
         for index, segment in enumerate(segments, start=1):
@@ -75,6 +93,25 @@ class WhisperEngine(SpeechRecognitionEngine):
 
         logger.info("Whisper transcribed %d cues", len(cues))
         return cues
+
+    def _get_transcriber(self):
+        """Return a BatchedInferencePipeline when available for higher CPU
+        throughput (processes multiple audio chunks per forward pass),
+        falling back to the plain WhisperModel on older faster-whisper
+        versions that don't have it."""
+        if self._batched_model is not None:
+            return self._batched_model
+        try:
+            from faster_whisper import BatchedInferencePipeline
+
+            self._batched_model = BatchedInferencePipeline(model=self._model)
+            return self._batched_model
+        except ImportError:
+            logger.info(
+                "BatchedInferencePipeline unavailable in this faster-whisper "
+                "version; falling back to non-batched transcription."
+            )
+            return self._model
 
     @staticmethod
     def _notify(callback: Optional[StatusCallback], message: str) -> None:
