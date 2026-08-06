@@ -141,6 +141,35 @@ class TranslateService:
             logger.exception("Subtitle translation failed")
             return TranslationResult(success=False, error=f"Subtitle translation failed: {exc}")
 
+    @staticmethod
+    def _from_pretrained_prefer_local(loader_cls: Any, model_id: str, cache_dir: str) -> Any:
+        """Load a tokenizer/model, preferring the local cache.
+
+        With ``local_files_only=False``, every startup makes a network
+        round-trip to Hugging Face Hub to check for updated files, even
+        when the model is already fully cached. On a slow or unstable
+        connection this can hang for a long time before falling back to
+        the cache. Try the cache first (instant, no network) and only
+        hit the network if the cache is incomplete or missing.
+        """
+        try:
+            return loader_cls.from_pretrained(
+                model_id,
+                cache_dir=cache_dir,
+                local_files_only=True,
+            )
+        except Exception:
+            logger.info(
+                "%s not fully cached locally for %s; fetching from network.",
+                loader_cls.__name__,
+                model_id,
+            )
+            return loader_cls.from_pretrained(
+                model_id,
+                cache_dir=cache_dir,
+                local_files_only=False,
+            )
+
     def _ensure_model_loaded(self, progress_callback: Optional[StatusCallback] = None) -> bool:
         if self._loaded:
             return True
@@ -169,26 +198,18 @@ class TranslateService:
                 logger.info("Attempting to load translation model: %s", model_id)
 
                 if backend == "marian":
-                    tokenizer = MarianTokenizer.from_pretrained(
-                        model_id,
-                        cache_dir=cache_dir,
-                        local_files_only=False,
+                    tokenizer = self._from_pretrained_prefer_local(
+                        MarianTokenizer, model_id, cache_dir
                     )
-                    model = MarianMTModel.from_pretrained(
-                        model_id,
-                        cache_dir=cache_dir,
-                        local_files_only=False,
+                    model = self._from_pretrained_prefer_local(
+                        MarianMTModel, model_id, cache_dir
                     )
                 else:
-                    tokenizer = AutoTokenizer.from_pretrained(
-                        model_id,
-                        cache_dir=cache_dir,
-                        local_files_only=False,
+                    tokenizer = self._from_pretrained_prefer_local(
+                        AutoTokenizer, model_id, cache_dir
                     )
-                    model = AutoModelForSeq2SeqLM.from_pretrained(
-                        model_id,
-                        cache_dir=cache_dir,
-                        local_files_only=False,
+                    model = self._from_pretrained_prefer_local(
+                        AutoModelForSeq2SeqLM, model_id, cache_dir
                     )
 
                 model.to(self._device)
