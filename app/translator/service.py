@@ -338,7 +338,7 @@ class TranslateService:
 
         if self._backend == "nllb":
             self._tokenizer.src_lang = self._src_lang  # type: ignore[assignment]
-            forced_bos = self._tokenizer.lang_code_to_id[self._tgt_lang]  # type: ignore[index]
+            forced_bos = self._get_nllb_forced_bos_id(self._tgt_lang)  # type: ignore[arg-type]
             generate_kwargs["forced_bos_token_id"] = forced_bos
         elif self._backend == "m2m100":
             self._tokenizer.src_lang = self._src_lang  # type: ignore[assignment]
@@ -364,6 +364,20 @@ class TranslateService:
             cleaned = translated.strip()
             outputs.append(cleaned if cleaned else original)
         return outputs
+
+    def _get_nllb_forced_bos_id(self, lang_code: str) -> int:
+        """Return the forced BOS token id for an NLLB target language.
+
+        ``transformers`` removed the ``lang_code_to_id`` attribute from
+        ``NllbTokenizer``/``NllbTokenizerFast`` in newer releases; language
+        codes are now resolved like any other added token via
+        ``convert_tokens_to_ids``. Support both so this works across
+        ``transformers>=4.36`` installs.
+        """
+        lang_to_id = getattr(self._tokenizer, "lang_code_to_id", None)
+        if lang_to_id is not None:
+            return lang_to_id[lang_code]
+        return self._tokenizer.convert_tokens_to_ids(lang_code)  # type: ignore[union-attr]
 
     @staticmethod
     def _notify(progress_callback: Optional[StatusCallback], message: str) -> None:
