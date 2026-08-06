@@ -194,6 +194,15 @@ class TranslateService:
                 model.to(self._device)
                 model.eval()
 
+                # The pretrained generation_config ships a default
+                # max_length (e.g. 200), which conflicts with the
+                # max_new_tokens we pass on every generate() call below
+                # and spams "Both `max_new_tokens` and `max_length`..."
+                # warnings once per translated block/cue. Clear it so
+                # max_new_tokens is the sole limit, as intended.
+                if hasattr(model, "generation_config") and model.generation_config is not None:
+                    model.generation_config.max_length = None
+
                 self._model = model
                 self._tokenizer = tokenizer
                 self._backend = backend
