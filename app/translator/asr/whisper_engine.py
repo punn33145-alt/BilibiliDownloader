@@ -7,6 +7,7 @@ import logging
 from pathlib import Path
 from typing import Optional
 
+from app.core.paths import get_models_dir
 from app.translator.asr.base import StatusCallback, SpeechRecognitionEngine
 from app.translator.asr.timing import seconds_to_srt_timestamp
 from app.translator.srt import SubtitleCue
@@ -38,7 +39,12 @@ class WhisperEngine(SpeechRecognitionEngine):
 
         self._notify(progress_callback, f"Loading Whisper model ({self._model_size})...")
         if self._model is None:
-            self._model = WhisperModel(self._model_size, device="auto", compute_type="auto")
+            self._model = WhisperModel(
+                self._model_size,
+                device="auto",
+                compute_type="auto",
+                download_root=str(get_models_dir()),
+            )
 
         self._notify(progress_callback, "Transcribing audio (Whisper)...")
         segments, _info = self._model.transcribe(

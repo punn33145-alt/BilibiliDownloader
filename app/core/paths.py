@@ -2,9 +2,17 @@
 
 from __future__ import annotations
 
+import os
 import re
 import sys
 from pathlib import Path
+
+# Name of the (git-ignored) local override file. Put an absolute path
+# on a single line inside this file — e.g. D:\Download_VD_Bilibili —
+# to store downloaded models on a drive with more free space. This file
+# is machine-specific and is excluded from version control, so it is
+# never pushed to the repo.
+MODELS_DIR_OVERRIDE_FILE = "models_dir.local.txt"
 
 
 def get_project_root() -> Path:
@@ -30,8 +38,25 @@ def get_icon_path() -> Path:
 
 
 def get_models_dir() -> Path:
-    """Local model storage — project models/ folder only."""
-    path = get_project_root() / "models"
+    """Local model storage.
+
+    Resolution order:
+    1. ``BILIBILI_DOWNLOADER_MODELS_DIR`` environment variable, if set.
+    2. A local override file (see ``MODELS_DIR_OVERRIDE_FILE``) in the
+       project root containing a single path, e.g. ``D:\\Download_VD_Bilibili``.
+       This file is git-ignored, so each machine can redirect model
+       storage to a drive with more free space without ever affecting
+       (or being pushed to) the repository.
+    3. The default project ``models/`` folder.
+    """
+    override = os.environ.get("BILIBILI_DOWNLOADER_MODELS_DIR", "").strip()
+
+    if not override:
+        override_file = get_project_root() / MODELS_DIR_OVERRIDE_FILE
+        if override_file.exists():
+            override = override_file.read_text(encoding="utf-8").strip()
+
+    path = Path(override) if override else get_project_root() / "models"
     path.mkdir(parents=True, exist_ok=True)
     return path
 

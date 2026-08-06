@@ -21,6 +21,9 @@ dist/
 logs/
 models/
 
+# Machine-specific model storage override (see app/core/paths.py)
+models_dir.local.txt
+
 # OS
 Thumbs.db
 Desktop.ini
