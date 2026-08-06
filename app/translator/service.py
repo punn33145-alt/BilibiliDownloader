@@ -17,7 +17,7 @@ from app.translator.text import (
     TermGlossary,
     apply_glossary_placeholders,
     block_to_translatable,
-    build_glossary_from_terms,
+    build_glossary_from_terms_batch,
     contains_chinese,
     extract_repeated_chinese_terms,
     is_confident_translation,
@@ -261,9 +261,10 @@ class TranslateService:
         repeated_terms = extract_repeated_chinese_terms(
             [block_sources[i] for i in translatable_indices]
         )
-        glossary = build_glossary_from_terms(
+        glossary = build_glossary_from_terms_batch(
             repeated_terms,
-            translate_term=lambda term: self._translate_raw_text(term),
+            translate_batch=self._translate_raw_texts,
+            batch_size=_BATCH_SIZE,
         )
 
         total = len(translatable_indices)
@@ -328,6 +329,28 @@ class TranslateService:
         outputs = self._run_model_batch([protected.masked])
         return restore_protected(outputs[0], protected)
 
+    def _translate_raw_texts(self, texts: list[str]) -> list[str]:
+        """Batch variant of _translate_raw_text — one model call for many texts."""
+        if not texts:
+            return []
+
+        prepared: list[tuple[str, ProtectedText]] = []
+        for text in texts:
+            if not text.strip():
+                prepared.append((text, ProtectedText(masked=text)))
+                continue
+            protected = protect_non_translatable(text)
+            prepared.append((protected.masked, protected))
+
+        raw_outputs = self._run_model_batch([item[0] for item in prepared])
+        results: list[str] = []
+        for original_text, (_masked, protected), raw in zip(texts, prepared, raw_outputs):
+            if not original_text.strip():
+                results.append(original_text)
+                continue
+            results.append(restore_protected(raw, protected))
+        return results
+
     def _run_model_batch(self, texts: list[str]) -> list[str]:
         import torch
 
@@ -341,7 +364,10 @@ class TranslateService:
 
         generate_kwargs: dict[str, Any] = {
             "max_new_tokens": 512,
-            "num_beams": 4,
+            # Lower beam count trades a small amount of translation quality
+            # for a large CPU speedup (beam search cost scales ~linearly
+            # with num_beams). 4 -> 2 roughly halves generate() time.
+            "num_beams": 2,
             "do_sample": False,
         }
 

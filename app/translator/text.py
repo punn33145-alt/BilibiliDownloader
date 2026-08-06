@@ -316,3 +316,30 @@ def build_glossary_from_terms(
         else:
             glossary.remember(term, term)
     return glossary
+
+
+def build_glossary_from_terms_batch(
+    terms: list[str],
+    translate_batch: Callable[[list[str]], list[str]],
+    batch_size: int = 8,
+) -> TermGlossary:
+    """
+    Pre-translate repeated terms once for consistent naming, batching
+    multiple terms per model call instead of one generate() call per term.
+
+    Uncertain proper nouns keep their original Chinese form.
+    """
+    glossary = TermGlossary()
+    candidates = [t for t in sorted(terms, key=len, reverse=True) if contains_chinese(t)]
+
+    for start in range(0, len(candidates), batch_size):
+        chunk = candidates[start : start + batch_size]
+        translations = translate_batch(chunk)
+        for term, translated in zip(chunk, translations):
+            translated = translated.strip()
+            if is_confident_translation(term, translated):
+                glossary.remember(term, translated)
+            else:
+                glossary.remember(term, term)
+
+    return glossary
