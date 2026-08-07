@@ -138,6 +138,93 @@ def translatable_to_block(translated: str, expected_line_count: int) -> list[str
     return head + [tail.replace(LINE_BREAK_MARKER, "\n")]
 
 
+_SENTENCE_END_CHARS = ("。", "！", "？", "…", ".", "!", "?")
+_TRAILING_CLOSERS = "\"'\u201d\u2019\u300d\u300f)]"
+
+
+def _ends_sentence(text: str) -> bool:
+    """True if text looks like it ends a sentence (ignoring trailing
+    quotes/brackets after the punctuation, e.g. '他说完了。」')."""
+    stripped = text.rstrip().rstrip(_TRAILING_CLOSERS)
+    return stripped.endswith(_SENTENCE_END_CHARS)
+
+
+def group_cue_indices_by_sentence(
+    block_sources: list[str],
+    translatable_indices: list[int],
+) -> list[list[int]]:
+    """
+    Group consecutive translatable cue indices that belong to the same
+    sentence — i.e. one cue's source text doesn't end with sentence-ending
+    punctuation and the next cue immediately follows it in the original
+    cue list (VAD/ASR often chops one spoken sentence into several short
+    cues). Translating the merged sentence gives the model real grammatical
+    context instead of a disconnected fragment.
+
+    Cues with a gap between them (a non-translatable cue in between) are
+    never grouped together, since they aren't actually adjacent speech.
+    """
+    groups: list[list[int]] = []
+    current: list[int] = []
+    prev_idx: Optional[int] = None
+
+    for idx in translatable_indices:
+        contiguous = prev_idx is not None and idx == prev_idx + 1
+        prev_unfinished = prev_idx is not None and not _ends_sentence(block_sources[prev_idx])
+        if current and contiguous and prev_unfinished:
+            current.append(idx)
+        else:
+            if current:
+                groups.append(current)
+            current = [idx]
+        prev_idx = idx
+
+    if current:
+        groups.append(current)
+
+    return groups
+
+
+def distribute_translation_across_group(
+    translated_text: str,
+    source_lengths: list[int],
+) -> list[str]:
+    """
+    Split one merged translation back across the original cues it came
+    from, proportionally to each cue's original (source) text length —
+    so the combined sentence still lines up with its original timing
+    slots. This is an approximation (word boundaries won't always match
+    perfectly), which is standard practice for splitting a merged
+    subtitle translation back onto per-cue timings.
+    """
+    if len(source_lengths) <= 1:
+        return [translated_text]
+
+    words = translated_text.split()
+    total_len = sum(source_lengths) or 1
+
+    if not words:
+        return ["" for _ in source_lengths]
+
+    boundaries: list[int] = []
+    cumulative = 0
+    for length in source_lengths[:-1]:
+        cumulative += length
+        boundary = round(len(words) * cumulative / total_len)
+        boundary = max(0, min(len(words), boundary))
+        if boundaries:
+            boundary = max(boundary, boundaries[-1])
+        boundaries.append(boundary)
+
+    parts: list[str] = []
+    start = 0
+    for boundary in boundaries:
+        parts.append(" ".join(words[start:boundary]))
+        start = boundary
+    parts.append(" ".join(words[start:]))
+    return parts
+
+
 def protect_non_translatable(text: str) -> ProtectedText:
     """Mask URLs, tags, symbols, and filenames before translation."""
     segments: list[ProtectedSegment] = []

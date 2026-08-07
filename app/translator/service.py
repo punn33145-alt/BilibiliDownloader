@@ -19,7 +19,9 @@ from app.translator.text import (
     block_to_translatable,
     build_glossary_from_terms_batch,
     contains_chinese,
+    distribute_translation_across_group,
     extract_repeated_chinese_terms,
+    group_cue_indices_by_sentence,
     is_confident_translation,
     merge_translation_with_original,
     protect_non_translatable,
@@ -291,32 +293,51 @@ class TranslateService:
             batch_size=_BATCH_SIZE,
         )
 
-        total = len(translatable_indices)
-        for batch_start in range(0, total, _BATCH_SIZE):
-            batch_indices = translatable_indices[batch_start : batch_start + _BATCH_SIZE]
-            sources = [block_sources[i] for i in batch_indices]
-            originals = [result[i].text_lines for i in batch_indices]
-            translated_blocks = self._translate_blocks_batch(sources, glossary)
+        # Group consecutive fragments that VAD/ASR likely chopped out of a
+        # single spoken sentence (no ending punctuation between them) and
+        # translate each group as one full sentence. This gives the model
+        # real grammatical context instead of disconnected fragments —
+        # noticeably reducing garbled/incoherent Vietnamese — and, as a
+        # bonus, means fewer/larger translate calls overall (grouped
+        # fragments count as one unit), not more.
+        groups = group_cue_indices_by_sentence(block_sources, translatable_indices)
+        group_sources = ["".join(block_sources[i] for i in group) for group in groups]
 
-            for cue_idx, source_block, original_lines, translated in zip(
-                batch_indices, sources, originals, translated_blocks
+        total_groups = len(groups)
+        for batch_start in range(0, total_groups, _BATCH_SIZE):
+            batch_groups = groups[batch_start : batch_start + _BATCH_SIZE]
+            batch_sources = group_sources[batch_start : batch_start + _BATCH_SIZE]
+            translated_blocks = self._translate_blocks_batch(batch_sources, glossary)
+
+            for group, source_block, translated in zip(
+                batch_groups, batch_sources, translated_blocks
             ):
-                expected_lines = len(original_lines)
-                if is_confident_translation(source_block, translated):
-                    new_lines = translatable_to_block(translated, expected_lines)
-                else:
-                    new_lines = list(original_lines)
+                if not is_confident_translation(source_block, translated):
+                    continue  # keep original Chinese text for every cue in the group
 
-                result[cue_idx].text_lines = merge_translation_with_original(
-                    original_lines,
-                    new_lines,
-                )
+                if len(group) == 1:
+                    cue_idx = group[0]
+                    original_lines = result[cue_idx].text_lines
+                    new_lines = translatable_to_block(translated, len(original_lines))
+                    result[cue_idx].text_lines = merge_translation_with_original(
+                        original_lines, new_lines
+                    )
+                    continue
 
-            done = min(batch_start + _BATCH_SIZE, total)
-            pct = int((done / total) * 100)
+                source_lengths = [len(block_sources[i]) for i in group]
+                parts = distribute_translation_across_group(translated, source_lengths)
+                for cue_idx, part in zip(group, parts):
+                    original_lines = result[cue_idx].text_lines
+                    new_lines = [part] if part else list(original_lines)
+                    result[cue_idx].text_lines = merge_translation_with_original(
+                        original_lines, new_lines
+                    )
+
+            done = min(batch_start + _BATCH_SIZE, total_groups)
+            pct = int((done / total_groups) * 100)
             self._notify(
                 progress_callback,
-                f"Translating subtitles... {pct}% ({done}/{total} blocks)",
+                f"Translating subtitles... {pct}% ({done}/{total_groups} groups)",
             )
 
         return result
@@ -386,12 +407,15 @@ class TranslateService:
         if not clipped:
             return []
 
+        # MarianMT is small/fast enough on CPU that we can afford a much
+        # higher beam count than the larger NLLB/M2M100 fallbacks without
+        # losing the overall speed win from switching to it — better
+        # translation quality at effectively no extra wall-clock cost.
+        num_beams = 5 if self._backend == "marian" else 2
+
         generate_kwargs: dict[str, Any] = {
             "max_new_tokens": 512,
-            # Lower beam count trades a small amount of translation quality
-            # for a large CPU speedup (beam search cost scales ~linearly
-            # with num_beams). 4 -> 2 roughly halves generate() time.
-            "num_beams": 2,
+            "num_beams": num_beams,
             "do_sample": False,
         }
 

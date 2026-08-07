@@ -16,7 +16,7 @@ def create_speech_recognition_engines() -> list:
     """Build available ASR engines in priority order."""
     engines = []
     if WhisperEngine.is_available():
-        engines.append(WhisperEngine())
+        engines.append(WhisperEngine("small"))
     if SenseVoiceEngine.is_available():
         engines.append(SenseVoiceEngine())
     return engines
