@@ -6,6 +6,7 @@ import os
 import re
 import sys
 from pathlib import Path
+from typing import Optional
 
 # Name of the (git-ignored) local override file. Put an absolute path
 # on a single line inside this file — e.g. D:\Download_VD_Bilibili —
@@ -13,6 +14,11 @@ from pathlib import Path
 # is machine-specific and is excluded from version control, so it is
 # never pushed to the repo.
 MODELS_DIR_OVERRIDE_FILE = "models_dir.local.txt"
+
+# Name of the (git-ignored) local file holding a free Gemini API key for
+# optional online context-aware translation. Never committed — see
+# get_gemini_api_key() below.
+GEMINI_API_KEY_FILE = "gemini_api_key.local.txt"
 
 
 def get_project_root() -> Path:
@@ -65,6 +71,33 @@ def get_logs_dir() -> Path:
     path = get_project_root() / "logs"
     path.mkdir(parents=True, exist_ok=True)
     return path
+
+
+def get_gemini_api_key() -> Optional[str]:
+    """
+    Optional Gemini API key for online, context-aware translation.
+
+    Resolution order:
+    1. ``BILIBILI_DOWNLOADER_GEMINI_API_KEY`` environment variable.
+    2. A local file (see ``GEMINI_API_KEY_FILE``) in the project root
+       containing the key on a single line. Git-ignored — never leaves
+       this machine.
+
+    Returns None if no key is configured, meaning the app stays fully
+    offline (its default behavior) and callers should fall back to the
+    local translation models.
+    """
+    key = os.environ.get("BILIBILI_DOWNLOADER_GEMINI_API_KEY", "").strip()
+    if key:
+        return key
+
+    key_file = get_project_root() / GEMINI_API_KEY_FILE
+    if key_file.exists():
+        key = key_file.read_text(encoding="utf-8").strip()
+        if key:
+            return key
+
+    return None
 
 
 def sanitize_filename(name: str, max_length: int = 180) -> str:

@@ -1,0 +1,5 @@
+# Optional: only needed if you want online, context-aware translation via
+# the Gemini API free tier (see gemini_api_key.local.txt setup in README /
+# app/core/paths.py). Without this installed, the app works exactly as
+# before — fully offline with the local MarianMT/NLLB models.
+google-genai>=1.0.0

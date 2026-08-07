@@ -7,9 +7,10 @@ import sys
 from pathlib import Path
 from typing import Any, Callable, Optional
 
-from app.core.paths import get_models_dir
+from app.core.paths import get_gemini_api_key, get_models_dir
 from app.core.ssl_setup import configure_ssl_certificates, get_ca_bundle_path
 from app.translator.deps import get_missing_translation_packages, translation_install_message
+from app.translator.gemini_translate import translate_cues_with_gemini
 from app.translator.models import TranslationResult
 from app.translator.srt import SubtitleCue, read_srt_file, write_srt_file
 from app.translator.text import (
@@ -121,6 +122,34 @@ class TranslateService:
                 return TranslationResult(
                     success=False,
                     error="Subtitle file is empty or unreadable.",
+                )
+
+            # Optional online path: only attempted when the user has
+            # configured a free Gemini API key (see get_gemini_api_key).
+            # Any failure here (no key, no network, quota, bad response)
+            # silently falls through to the offline pipeline below —
+            # online translation is a bonus, never a hard dependency.
+            gemini_key = get_gemini_api_key()
+            if gemini_key:
+                self._notify(progress_callback, "Translating via Gemini (online)...")
+                gemini_cues = translate_cues_with_gemini(
+                    cues, gemini_key, progress_callback
+                )
+                if gemini_cues is not None:
+                    write_srt_file(output_path, gemini_cues)
+                    logger.info(
+                        "Translated %d cues -> %s (model: gemini, online)",
+                        len(gemini_cues),
+                        output_path,
+                    )
+                    return TranslationResult(
+                        success=True,
+                        output_path=output_path,
+                        model_used="gemini (online)",
+                    )
+                logger.info(
+                    "Gemini translation unavailable/failed; falling back to "
+                    "offline model."
                 )
 
             if not self._ensure_model_loaded(progress_callback):

@@ -24,6 +24,9 @@ models/
 # Machine-specific model storage override (see app/core/paths.py)
 models_dir.local.txt
 
+# Local Gemini API key for optional online translation (see app/core/paths.py)
+gemini_api_key.local.txt
+
 # OS
 Thumbs.db
 Desktop.ini
