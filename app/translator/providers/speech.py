@@ -8,6 +8,7 @@ from typing import Optional, Sequence
 
 from app.translator.asr.base import SpeechRecognitionEngine
 from app.translator.audio import extract_audio_wav
+from app.translator.cleanup import clean_repetition_artifacts
 from app.translator.providers.base import StatusCallback, SubtitleProvider
 from app.translator.srt import write_srt_file
 from app.translator.subtitle_models import SubtitleContext, SubtitleResult
@@ -60,6 +61,7 @@ class SpeechRecognitionSubtitleProvider(SubtitleProvider):
                     f"Generating Chinese subtitles ({engine.name})...",
                 )
                 cues = engine.transcribe(audio_path, progress_callback)
+                cues = clean_repetition_artifacts(cues)
                 target = context.output_dir / f"{context.base_name}.zh.srt"
                 write_srt_file(target, cues)
                 self._notify(progress_callback, f"Chinese subtitle saved: {target.name}")
