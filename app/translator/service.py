@@ -22,12 +22,14 @@ from app.translator.text import (
     contains_chinese,
     distribute_translation_across_group,
     extract_repeated_chinese_terms,
+    find_unresolved_cues,
     group_cue_indices_by_sentence,
     is_confident_translation,
     merge_translation_with_original,
     protect_non_translatable,
     restore_glossary_placeholders,
     restore_protected,
+    strip_placeholder_leftovers,
     translatable_to_block,
 )
 
@@ -136,6 +138,8 @@ class TranslateService:
                     cues, gemini_key, progress_callback
                 )
                 if gemini_cues is not None:
+                    gemini_cues = strip_placeholder_leftovers(gemini_cues)
+                    self._warn_unresolved_cues(gemini_cues, output_path)
                     write_srt_file(output_path, gemini_cues)
                     logger.info(
                         "Translated %d cues -> %s (model: gemini, online)",
@@ -159,6 +163,8 @@ class TranslateService:
                 )
 
             translated_cues = self._translate_cues(cues, progress_callback)
+            translated_cues = strip_placeholder_leftovers(translated_cues)
+            self._warn_unresolved_cues(translated_cues, output_path)
             write_srt_file(output_path, translated_cues)
             logger.info(
                 "Translated %d cues → %s (model: %s)",
@@ -499,3 +505,27 @@ class TranslateService:
         if progress_callback:
             progress_callback(message)
         logger.info(message)
+
+    @staticmethod
+    def _warn_unresolved_cues(cues: list, output_path) -> None:
+        """
+        Log exactly which cues still contain Chinese text (translation
+        was skipped for that cue) or leftover placeholder characters —
+        both are very likely to be rejected by TTS tools like CapCut with
+        an "unsupported text" error. Logged (not raised) since the file
+        is still usable; this just tells the person exactly where to look
+        instead of guessing which lines need a manual fix.
+        """
+        unresolved = find_unresolved_cues(cues)
+        if not unresolved:
+            return
+        cue_numbers = ", ".join(str(c.index) for c in unresolved)
+        logger.warning(
+            "%d cue(s) in %s still contain untranslated/Chinese text or "
+            "leftover placeholder characters — these are the lines most "
+            "likely to be rejected by TTS tools (e.g. CapCut 'unsupported "
+            "text' error). Cue number(s): %s",
+            len(unresolved),
+            output_path,
+            cue_numbers,
+        )

@@ -244,6 +244,45 @@ def distribute_translation_across_group(
     return parts
 
 
+# Private Use Area — internal placeholder markers (LINE_BREAK_MARKER,
+# protected-segment placeholders) live here. They must never survive into
+# the final output: TTS tools like CapCut reject text containing them
+# (or any text still containing Chinese, meaning translation didn't run
+# for that cue), since they aren't valid speakable text.
+_PUA_CHAR_RANGE = re.compile(r"[\uE000-\uF8FF]")
+
+
+def find_unresolved_cues(cues: list["SubtitleCue"]) -> list["SubtitleCue"]:
+    """
+    Cues whose text still contains Chinese characters (translation was
+    skipped/kept the original due to low confidence) or leftover internal
+    placeholder characters after translation. Both are very likely to be
+    rejected by TTS tools such as CapCut with an "unsupported text"
+    error, since neither is valid Vietnamese/speakable text.
+    """
+    problems = []
+    for cue in cues:
+        text = " ".join(cue.text_lines)
+        if contains_chinese(text) or _PUA_CHAR_RANGE.search(text):
+            problems.append(cue)
+    return problems
+
+
+def strip_placeholder_leftovers(cues: list["SubtitleCue"]) -> list["SubtitleCue"]:
+    """
+    Defensive cleanup: remove any raw internal placeholder characters that
+    failed to get restored to their original text. This should not
+    normally happen, but if it does, it would otherwise silently leave
+    invisible/junk characters in the final subtitle that break TTS tools.
+    Returns a new list; does not mutate the input.
+    """
+    cleaned = []
+    for cue in cues:
+        new_lines = [_PUA_CHAR_RANGE.sub("", line) for line in cue.text_lines]
+        cleaned.append(type(cue)(index=cue.index, timing=cue.timing, text_lines=new_lines))
+    return cleaned
+
+
 def protect_non_translatable(text: str) -> ProtectedText:
     """Mask URLs, tags, symbols, and filenames before translation."""
     segments: list[ProtectedSegment] = []
