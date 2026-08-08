@@ -34,9 +34,17 @@ logger = logging.getLogger(__name__)
 
 StatusCallback = Callable[[str], None]
 
-# Flash-Lite has the most generous free-tier request/day quota of the
-# Gemini model family, and is plenty capable for subtitle translation.
-_DEFAULT_MODEL = "gemini-2.5-flash-lite"
+# NOTE: Google frequently retires/restricts Gemini model names (e.g.
+# gemini-2.0-flash shut down June 2026; gemini-2.5-flash-lite closed to
+# new API keys mid-2026 ahead of its Oct 2026 shutdown). Trying a short
+# list of candidates — newest free-tier-eligible model first — means a
+# single retirement doesn't silently break online translation until
+# someone edits this file again.
+_MODEL_CANDIDATES: tuple[str, ...] = (
+    "gemini-3.1-flash-lite",
+    "gemini-2.5-flash-lite",
+    "gemini-2.5-flash",
+)
 
 # Cues per request. Keeps each request's output comfortably inside a
 # single response (avoids truncation) while still translating a typical
@@ -133,12 +141,17 @@ def translate_cues_with_gemini(
     cues: list[SubtitleCue],
     api_key: str,
     progress_callback: Optional[StatusCallback] = None,
-    model: str = _DEFAULT_MODEL,
+    model: Optional[str] = None,
 ) -> Optional[list[SubtitleCue]]:
     """
     Translate cues via the Gemini API. Returns a new cue list on success,
     or None on any failure (caller should fall back to the offline
     pipeline — this is never the only translation path).
+
+    If ``model`` isn't given, tries each of _MODEL_CANDIDATES in order on
+    the first chunk (older/retired model names return a 404 immediately,
+    so this costs at most a couple of failed calls) and reuses whichever
+    one works for the rest of the file.
     """
     if not cues:
         return cues
@@ -173,10 +186,22 @@ def translate_cues_with_gemini(
 
     chunks = _chunked(translatable, _CHUNK_SIZE)
     total = len(chunks)
+    candidates = [model] if model else list(_MODEL_CANDIDATES)
+    working_model: Optional[str] = None
 
     for chunk_num, chunk in enumerate(chunks, start=1):
         payload = [{"id": i, "text": text} for i, text in chunk]
-        translations = _translate_chunk(client, model, payload)
+
+        if working_model is not None:
+            translations = _translate_chunk(client, working_model, payload)
+        else:
+            translations = None
+            for candidate in candidates:
+                translations = _translate_chunk(client, candidate, payload)
+                if translations is not None:
+                    working_model = candidate
+                    logger.info("Using Gemini model: %s", candidate)
+                    break
 
         if translations is None:
             # One failed chunk invalidates the whole online attempt —
