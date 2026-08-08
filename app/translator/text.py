@@ -251,6 +251,32 @@ def distribute_translation_across_group(
 # for that cue), since they aren't valid speakable text.
 _PUA_CHAR_RANGE = re.compile(r"[\uE000-\uF8FF]")
 
+# Known interjection/onomatopoeia spellings that translation models
+# sometimes produce (often loose transliterations of Chinese sighs like
+# 哎/唉) which aren't standard Vietnamese vocabulary and can get rejected
+# by TTS engines (e.g. CapCut "unsupported text" error) even though
+# they contain no Chinese characters or invalid symbols. Mapped to a
+# more common, TTS-friendly spelling. Extend this as more real examples
+# turn up — case-insensitive, whole-word match.
+_TTS_UNFRIENDLY_WORD_CORRECTIONS: dict[str, str] = {
+    "haizz": "Haiz",
+    "haizzz": "Haiz",
+    "haiiz": "Haiz",
+}
+_TTS_CORRECTION_RE = re.compile(
+    r"\b(" + "|".join(re.escape(k) for k in _TTS_UNFRIENDLY_WORD_CORRECTIONS) + r")\b",
+    re.IGNORECASE,
+)
+
+
+def normalize_tts_unfriendly_words(text: str) -> str:
+    """Replace known non-standard interjection spellings with a more
+    common form, to reduce the chance a TTS tool rejects the line."""
+    def _replace(match: "re.Match[str]") -> str:
+        return _TTS_UNFRIENDLY_WORD_CORRECTIONS[match.group(1).lower()]
+
+    return _TTS_CORRECTION_RE.sub(_replace, text)
+
 
 def find_unresolved_cues(cues: list["SubtitleCue"]) -> list["SubtitleCue"]:
     """
@@ -270,15 +296,19 @@ def find_unresolved_cues(cues: list["SubtitleCue"]) -> list["SubtitleCue"]:
 
 def strip_placeholder_leftovers(cues: list["SubtitleCue"]) -> list["SubtitleCue"]:
     """
-    Defensive cleanup: remove any raw internal placeholder characters that
-    failed to get restored to their original text. This should not
-    normally happen, but if it does, it would otherwise silently leave
-    invisible/junk characters in the final subtitle that break TTS tools.
+    Defensive cleanup applied right before writing the final subtitle:
+    1. Remove any raw internal placeholder characters that failed to get
+       restored to their original text (should not normally happen).
+    2. Normalize known non-standard interjection spellings (see
+       normalize_tts_unfriendly_words) that real TTS tools have rejected.
     Returns a new list; does not mutate the input.
     """
     cleaned = []
     for cue in cues:
-        new_lines = [_PUA_CHAR_RANGE.sub("", line) for line in cue.text_lines]
+        new_lines = [
+            normalize_tts_unfriendly_words(_PUA_CHAR_RANGE.sub("", line))
+            for line in cue.text_lines
+        ]
         cleaned.append(type(cue)(index=cue.index, timing=cue.timing, text_lines=new_lines))
     return cleaned
 
