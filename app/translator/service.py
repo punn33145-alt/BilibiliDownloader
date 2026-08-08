@@ -436,11 +436,14 @@ class TranslateService:
         if not clipped:
             return []
 
-        # MarianMT is small/fast enough on CPU that we can afford a much
-        # higher beam count than the larger NLLB/M2M100 fallbacks without
-        # losing the overall speed win from switching to it — better
-        # translation quality at effectively no extra wall-clock cost.
-        num_beams = 5 if self._backend == "marian" else 2
+        # NOTE: was bumped to 5 assuming Marian only ran as a light bonus
+        # once Gemini did most of the work, but Marian is the *entire*
+        # fallback whenever Gemini fails (network, quota, bad response) —
+        # in that case it translates the whole file alone, and beam=5
+        # made that painfully slow (~30 min for half a typical file).
+        # Reliability of the fallback matters more than the small quality
+        # gain, so keep beam count low for every backend.
+        num_beams = 2
 
         generate_kwargs: dict[str, Any] = {
             "max_new_tokens": 512,

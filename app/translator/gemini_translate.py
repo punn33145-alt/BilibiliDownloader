@@ -27,12 +27,19 @@ import json
 import logging
 from typing import Any, Callable, Optional
 
+from pydantic import BaseModel
+
 from app.translator.srt import SubtitleCue
 from app.translator.text import contains_chinese
 
 logger = logging.getLogger(__name__)
 
 StatusCallback = Callable[[str], None]
+
+
+class _TranslationItem(BaseModel):
+    id: int
+    text: str
 
 # NOTE: Google frequently retires/restricts Gemini model names (e.g.
 # gemini-2.0-flash shut down June 2026; gemini-2.5-flash-lite closed to
@@ -103,6 +110,13 @@ def _translate_chunk(client: Any, model: str, chunk: list[dict[str, Any]]) -> Op
             config=types.GenerateContentConfig(
                 system_instruction=_SYSTEM_PROMPT,
                 response_mime_type="application/json",
+                # response_schema forces the model into constrained/
+                # controlled decoding that structurally can't produce
+                # invalid JSON (missing quotes, trailing commas, etc.) —
+                # response_mime_type alone is only a hint and can still
+                # occasionally malform, especially with quote characters
+                # inside translated dialogue.
+                response_schema=list[_TranslationItem],
                 temperature=0.3,
             ),
         )
