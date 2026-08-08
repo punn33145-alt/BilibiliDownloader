@@ -152,6 +152,8 @@ def _ends_sentence(text: str) -> bool:
 def group_cue_indices_by_sentence(
     block_sources: list[str],
     translatable_indices: list[int],
+    max_group_cues: int = 4,
+    max_group_chars: int = 100,
 ) -> list[list[int]]:
     """
     Group consecutive translatable cue indices that belong to the same
@@ -163,20 +165,37 @@ def group_cue_indices_by_sentence(
 
     Cues with a gap between them (a non-translatable cue in between) are
     never grouped together, since they aren't actually adjacent speech.
+
+    Capped by max_group_cues / max_group_chars: ASR output for casual
+    speech very often has NO terminal punctuation at all (Whisper doesn't
+    reliably punctuate Chinese), which would otherwise merge dozens of
+    unrelated short cues into one giant, unnaturally long "sentence" —
+    far outside what a subtitle-level translation model was trained on,
+    which can make it degrade into repetitive garbage output. These caps
+    keep grouping to its intended purpose (stitching a handful of
+    genuinely split fragments back together) without letting it run away
+    on unpunctuated transcripts.
     """
     groups: list[list[int]] = []
     current: list[int] = []
+    current_chars = 0
     prev_idx: Optional[int] = None
 
     for idx in translatable_indices:
+        text = block_sources[idx]
         contiguous = prev_idx is not None and idx == prev_idx + 1
         prev_unfinished = prev_idx is not None and not _ends_sentence(block_sources[prev_idx])
-        if current and contiguous and prev_unfinished:
+        within_caps = (
+            len(current) < max_group_cues and current_chars + len(text) <= max_group_chars
+        )
+        if current and contiguous and prev_unfinished and within_caps:
             current.append(idx)
+            current_chars += len(text)
         else:
             if current:
                 groups.append(current)
             current = [idx]
+            current_chars = len(text)
         prev_idx = idx
 
     if current:
