@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import subprocess
 from pathlib import Path
 from typing import Any, Callable, Optional
 
@@ -11,7 +12,7 @@ import yt_dlp
 from yt_dlp.utils import DownloadError, ExtractorError
 
 from app.core.ffmpeg import find_ffmpeg
-from app.core.paths import sanitize_filename
+from app.core.paths import get_bbdown_path, sanitize_filename
 from app.core.ssl_setup import configure_ssl_certificates, get_ca_bundle_path
 from app.core.url_validator import normalize_bilibili_url
 from app.downloader.assets import save_thumbnail
@@ -116,6 +117,34 @@ class DownloadService:
         video_file = video_folder / f"{safe_title}.mp4"
         outtmpl = str(video_folder / f"{safe_title}.%(ext)s")
 
+        # Optional: if BBDown is configured (see get_bbdown_path), try it
+        # first — it can fetch Bilibili's TV-API stream, which doesn't have
+        # the web/app API's baked-in logo watermark. Any failure here
+        # (not configured, not logged in, network error, binary missing)
+        # falls straight through to the normal yt-dlp download below —
+        # this is purely an optional enhancement, never a hard dependency.
+        bbdown_path = get_bbdown_path()
+        if bbdown_path is not None:
+            bbdown_file = self._download_with_bbdown(
+                bbdown_path, normalized, video_folder, progress_callback
+            )
+            if bbdown_file is not None:
+                video_file = bbdown_file
+                thumb_path = save_thumbnail(
+                    info.get("thumbnail") or "",
+                    video_folder / "Thumbnail.jpg",
+                )
+                readme_path = video_folder / "README.txt"
+                write_readme(readme_path, info, normalized)
+                return DownloadResult(
+                    output_dir=video_folder,
+                    video_path=video_file,
+                    readme_path=readme_path,
+                    thumbnail_path=thumb_path,
+                    subtitle_path=None,
+                )
+            logger.info("BBDown unavailable/failed; falling back to yt-dlp.")
+
         ydl_opts: dict[str, Any] = {
             **self._base_options(),
             "format": "bestvideo+bestaudio/best",
@@ -155,6 +184,65 @@ class DownloadService:
             raise self._map_download_error(exc) from exc
         except ExtractorError as exc:
             raise self._map_extractor_error(exc) from exc
+
+    def _download_with_bbdown(
+        self,
+        bbdown_path: Path,
+        url: str,
+        video_folder: Path,
+        progress_callback: Optional[ProgressCallback] = None,
+    ) -> Optional[Path]:
+        """
+        Try downloading via BBDown's TV-API mode (-tv), which avoids the
+        watermark baked into Bilibili's normal web/app API stream. Returns
+        the downloaded mp4's path on success, or None on any failure —
+        callers should fall back to the standard yt-dlp download.
+
+        Requires the user to have run `BBDown logintv` once beforehand
+        (interactive QR-code login); BBDown persists that login itself, so
+        no credentials are handled here.
+        """
+        existing_before = {p.name for p in video_folder.glob("*.mp4")}
+
+        try:
+            if progress_callback:
+                progress_callback(
+                    DownloadProgress(
+                        status="downloading",
+                        percentage=0.0,
+                        message="Downloading via BBDown (TV API, no watermark)...",
+                    )
+                )
+            result = subprocess.run(
+                [str(bbdown_path), url, "-tv"],
+                cwd=str(video_folder),
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=1800,  # 30 min ceiling for a single video download
+                check=False,
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            logger.warning("BBDown failed to run: %s", exc)
+            return None
+
+        if result.returncode != 0:
+            logger.warning(
+                "BBDown exited with code %s: %s",
+                result.returncode,
+                (result.stderr or result.stdout or "").strip()[-500:],
+            )
+            return None
+
+        new_mp4s = [
+            p for p in video_folder.glob("*.mp4") if p.name not in existing_before
+        ]
+        if not new_mp4s:
+            logger.warning("BBDown reported success but no new .mp4 was found.")
+            return None
+
+        return max(new_mp4s, key=lambda p: p.stat().st_mtime)
 
     def _make_hook(self, callback: Optional[ProgressCallback]):
         def hook(data: dict[str, Any]) -> None:

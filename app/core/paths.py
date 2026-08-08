@@ -20,6 +20,11 @@ MODELS_DIR_OVERRIDE_FILE = "models_dir.local.txt"
 # get_gemini_api_key() below.
 GEMINI_API_KEY_FILE = "gemini_api_key.local.txt"
 
+# Name of the (git-ignored) local file holding the path to BBDown.exe, an
+# optional external downloader used to avoid Bilibili's web/app-API
+# watermark (see get_bbdown_path() below).
+BBDOWN_PATH_FILE = "bbdown_path.local.txt"
+
 
 def get_project_root() -> Path:
     """Return the repository / project root directory."""
@@ -98,6 +103,34 @@ def get_gemini_api_key() -> Optional[str]:
             return key
 
     return None
+
+
+def get_bbdown_path() -> Optional[Path]:
+    """
+    Optional path to BBDown.exe, an external downloader used to fetch
+    Bilibili's TV-API video stream (no baked-in web/app logo watermark).
+
+    Resolution order:
+    1. ``BILIBILI_DOWNLOADER_BBDOWN_PATH`` environment variable.
+    2. A local file (see ``BBDOWN_PATH_FILE``) in the project root
+       containing the path on a single line. Git-ignored.
+
+    Returns None if not configured or the path doesn't point to an
+    existing file — callers should fall back to the normal yt-dlp
+    download path (BBDown is an optional enhancement, never required).
+    """
+    raw = os.environ.get("BILIBILI_DOWNLOADER_BBDOWN_PATH", "").strip()
+
+    if not raw:
+        path_file = get_project_root() / BBDOWN_PATH_FILE
+        if path_file.exists():
+            raw = path_file.read_text(encoding="utf-8").strip()
+
+    if not raw:
+        return None
+
+    path = Path(raw)
+    return path if path.is_file() else None
 
 
 def sanitize_filename(name: str, max_length: int = 180) -> str:
