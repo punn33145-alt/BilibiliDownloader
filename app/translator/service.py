@@ -163,6 +163,29 @@ class TranslateService:
                 )
 
             translated_cues = self._translate_cues(cues, progress_callback)
+
+            # A handful of cues sometimes survive translation still in
+            # Chinese — is_confident_translation() deliberately keeps the
+            # original rather than risk showing a garbled translation
+            # (usually domain-specific slang/idioms the small offline
+            # model doesn't know). If Gemini is configured, retry just
+            # those few leftover cues with it — an LLM handles slang far
+            # better than Marian/NLLB, and retrying only the leftovers
+            # (not the whole file) keeps this fast regardless of file size.
+            unresolved = find_unresolved_cues(translated_cues)
+            gemini_key = get_gemini_api_key()
+            if unresolved and gemini_key:
+                self._notify(
+                    progress_callback,
+                    f"Retrying {len(unresolved)} untranslated cue(s) via Gemini...",
+                )
+                retried = translate_cues_with_gemini(unresolved, gemini_key)
+                if retried is not None:
+                    retried_by_index = {cue.index: cue for cue in retried}
+                    translated_cues = [
+                        retried_by_index.get(cue.index, cue) for cue in translated_cues
+                    ]
+
             translated_cues = strip_placeholder_leftovers(translated_cues)
             self._warn_unresolved_cues(translated_cues, output_path)
             write_srt_file(output_path, translated_cues)
