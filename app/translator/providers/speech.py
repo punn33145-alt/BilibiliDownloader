@@ -34,6 +34,29 @@ class SpeechRecognitionSubtitleProvider(SubtitleProvider):
         context: SubtitleContext,
         progress_callback: Optional[StatusCallback] = None,
     ) -> SubtitleResult:
+        target = context.output_dir / f"{context.base_name}.zh.srt"
+
+        # If a Chinese subtitle from a previous run already exists, reuse
+        # it instead of re-extracting audio and re-running ASR — both are
+        # by far the slowest steps in the pipeline. This matters most when
+        # only the translation step needs retrying (e.g. after a
+        # translation-side fix): delete just the .vi.srt / .zh.srt file
+        # you actually want regenerated, and everything upstream of it is
+        # skipped automatically. Delete this .zh.srt yourself if you
+        # specifically want ASR to run again (e.g. it was inaccurate).
+        if target.exists() and target.stat().st_size > 0:
+            self._notify(
+                progress_callback,
+                f"Reusing existing Chinese subtitle: {target.name}",
+            )
+            return SubtitleResult(
+                success=True,
+                source_path=target,
+                language="zh",
+                provider_name="speech_recognition",
+                needs_translation=True,
+            )
+
         if not context.video_path.exists():
             return SubtitleResult(
                 success=False,
@@ -62,7 +85,6 @@ class SpeechRecognitionSubtitleProvider(SubtitleProvider):
                 )
                 cues = engine.transcribe(audio_path, progress_callback)
                 cues = clean_repetition_artifacts(cues)
-                target = context.output_dir / f"{context.base_name}.zh.srt"
                 write_srt_file(target, cues)
                 self._notify(progress_callback, f"Chinese subtitle saved: {target.name}")
                 return SubtitleResult(
