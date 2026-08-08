@@ -23,7 +23,6 @@ from app.translator.text import (
     distribute_translation_across_group,
     extract_repeated_chinese_terms,
     find_unresolved_cues,
-    group_cue_indices_by_sentence,
     is_confident_translation,
     merge_translation_with_original,
     protect_non_translatable,
@@ -351,15 +350,19 @@ class TranslateService:
             batch_size=_BATCH_SIZE,
         )
 
-        # Group consecutive fragments that VAD/ASR likely chopped out of a
-        # single spoken sentence (no ending punctuation between them) and
-        # translate each group as one full sentence. This gives the model
-        # real grammatical context instead of disconnected fragments —
-        # noticeably reducing garbled/incoherent Vietnamese — and, as a
-        # bonus, means fewer/larger translate calls overall (grouped
-        # fragments count as one unit), not more.
-        groups = group_cue_indices_by_sentence(block_sources, translatable_indices)
-        group_sources = ["".join(block_sources[i] for i in group) for group in groups]
+        # NOTE: previously grouped consecutive cues lacking terminal
+        # punctuation, assuming that meant one sentence had been VAD-split
+        # across them. Reverted: Chinese conversational ASR very often has
+        # NO punctuation even between complete, unrelated sentences —
+        # including between different speakers' turns — so this merged
+        # unrelated dialogue together and scrambled/misplaced content
+        # across cues that were previously translated correctly on their
+        # own. Each cue is translated independently again, which is safe
+        # even if slightly less fluent for genuinely split sentences.
+        # Gemini (when configured) already gets real cross-cue context
+        # from seeing a whole batch at once, without this risk.
+        groups = [[i] for i in translatable_indices]
+        group_sources = [block_sources[i] for i in translatable_indices]
 
         total_groups = len(groups)
         for batch_start in range(0, total_groups, _BATCH_SIZE):
