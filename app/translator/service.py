@@ -10,7 +10,7 @@ from typing import Any, Callable, Optional
 from app.core.paths import get_gemini_api_key, get_models_dir
 from app.core.ssl_setup import configure_ssl_certificates, get_ca_bundle_path
 from app.translator.deps import get_missing_translation_packages, translation_install_message
-from app.translator.gemini_translate import translate_cues_with_gemini
+from app.translator.gemini_translate import summarize_subtitles_with_gemini, translate_cues_with_gemini
 from app.translator.models import TranslationResult
 from app.translator.srt import SubtitleCue, read_srt_file, write_srt_file
 from app.translator.text import (
@@ -140,6 +140,7 @@ class TranslateService:
                     gemini_cues = strip_placeholder_leftovers(gemini_cues)
                     self._warn_unresolved_cues(gemini_cues, output_path)
                     write_srt_file(output_path, gemini_cues)
+                    self._maybe_write_ai_summary(gemini_cues, output_path, gemini_key)
                     logger.info(
                         "Translated %d cues -> %s (model: gemini, online)",
                         len(gemini_cues),
@@ -188,6 +189,7 @@ class TranslateService:
             translated_cues = strip_placeholder_leftovers(translated_cues)
             self._warn_unresolved_cues(translated_cues, output_path)
             write_srt_file(output_path, translated_cues)
+            self._maybe_write_ai_summary(translated_cues, output_path, gemini_key)
             logger.info(
                 "Translated %d cues → %s (model: %s)",
                 len(translated_cues),
@@ -525,6 +527,52 @@ class TranslateService:
         if lang_to_id is not None:
             return lang_to_id[lang_code]
         return self._tokenizer.convert_tokens_to_ids(lang_code)  # type: ignore[union-attr]
+
+    @staticmethod
+    def _maybe_write_ai_summary(
+        cues: list, output_path: Path, gemini_key: Optional[str]
+    ) -> None:
+        """
+        If a Gemini key is configured, summarize the translated Vietnamese
+        subtitles and append the summary to README.txt (same folder as
+        the .vi.srt) under an "AI SUMMARY" section — saves having to
+        watch the whole video just to write a description. Best-effort:
+        any failure (no key, README.txt missing, Gemini error) is logged
+        and otherwise ignored, never affects translation success.
+        """
+        if not gemini_key:
+            return
+
+        readme_path = output_path.parent / "README.txt"
+        if not readme_path.exists():
+            return
+
+        try:
+            existing = readme_path.read_text(encoding="utf-8")
+        except OSError as exc:
+            logger.warning("Could not read %s for AI summary: %s", readme_path, exc)
+            return
+
+        if "AI SUMMARY" in existing:
+            return  # already summarized (e.g. re-translating this file)
+
+        text = "\n".join(" ".join(cue.text_lines) for cue in cues)
+        summary = summarize_subtitles_with_gemini(text, gemini_key)
+        if not summary:
+            return
+
+        addition = (
+            "\nAI SUMMARY (auto-generated from translated subtitles)\n"
+            + "-" * 40
+            + "\n"
+            + summary
+            + "\n"
+        )
+        try:
+            readme_path.write_text(existing + addition, encoding="utf-8")
+            logger.info("Added AI summary to %s", readme_path)
+        except OSError as exc:
+            logger.warning("Could not write AI summary to %s: %s", readme_path, exc)
 
     @staticmethod
     def _notify(progress_callback: Optional[StatusCallback], message: str) -> None:

@@ -151,6 +151,71 @@ def _translate_chunk(client: Any, model: str, chunk: list[dict[str, Any]]) -> Op
     return result
 
 
+def summarize_subtitles_with_gemini(
+    vietnamese_text: str,
+    api_key: str,
+    video_title: str = "",
+    model: Optional[str] = None,
+) -> Optional[str]:
+    """
+    Ask Gemini for a short Vietnamese summary/description of the video,
+    based on its translated subtitles — useful when the uploader doesn't
+    want to watch the whole video just to write a description. Returns
+    None on any failure; this is a nice-to-have for README.txt, never a
+    hard requirement.
+    """
+    if not vietnamese_text.strip():
+        return None
+
+    if not _is_available():
+        return None
+
+    from google import genai
+    from google.genai import types
+
+    try:
+        client = genai.Client(api_key=api_key)
+    except Exception as exc:
+        logger.warning("Could not create Gemini client for summary: %s", exc)
+        return None
+
+    title_clause = f' titled "{video_title}"' if video_title.strip() else ""
+    system_instruction = (
+        "You write short, natural Vietnamese video descriptions. You will "
+        f"receive the full Vietnamese subtitle transcript of a video{title_clause}. "
+        "Write a concise summary (3-6 sentences) of what happens/what it's "
+        "about, suitable as a video description for viewers deciding "
+        "whether to watch. Write only the summary text itself — no "
+        "preamble, no markdown formatting, no quotation marks around it."
+    )
+
+    # Truncate very long transcripts to a safe prompt budget — a
+    # description doesn't need the exact wording of a 2-hour video down
+    # to the last line, and it keeps this single extra call cheap/fast.
+    excerpt = vietnamese_text[:40_000]
+
+    candidates = [model] if model else list(_MODEL_CANDIDATES)
+    for candidate in candidates:
+        try:
+            response = client.models.generate_content(
+                model=candidate,
+                contents=excerpt,
+                config=types.GenerateContentConfig(
+                    system_instruction=system_instruction,
+                    temperature=0.5,
+                ),
+            )
+        except Exception as exc:
+            logger.info("Gemini summary call failed with %s: %s", candidate, exc)
+            continue
+
+        text = getattr(response, "text", None)
+        if text and text.strip():
+            return text.strip()
+
+    return None
+
+
 def translate_cues_with_gemini(
     cues: list[SubtitleCue],
     api_key: str,
