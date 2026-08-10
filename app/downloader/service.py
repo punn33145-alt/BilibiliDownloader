@@ -216,13 +216,31 @@ class DownloadService:
             result = subprocess.run(
                 [str(bbdown_path), url, "-tv"],
                 cwd=str(video_folder),
+                # If BBDown ever needs interactive input (a quality menu,
+                # or re-login if the saved TV session expired), it would
+                # otherwise hang forever waiting for a keypress that can
+                # never arrive here. Closing stdin makes any such read()
+                # return EOF immediately, so BBDown exits with an error
+                # right away instead of hanging — much better than
+                # silently blocking with no visible reason why.
+                stdin=subprocess.DEVNULL,
                 capture_output=True,
                 text=True,
                 encoding="utf-8",
                 errors="replace",
-                timeout=1800,  # 30 min ceiling for a single video download
+                # Generous, but bounded — a stuck/hung process (e.g. an
+                # unexpected prompt DEVNULL didn't resolve) should fail
+                # and fall back to yt-dlp well before the person gives up
+                # waiting, rather than blocking for up to 30 minutes.
+                timeout=600,
                 check=False,
             )
+        except subprocess.TimeoutExpired:
+            logger.warning(
+                "BBDown timed out after 600s (possibly stuck waiting on "
+                "login/input) — falling back to yt-dlp."
+            )
+            return None
         except (OSError, subprocess.SubprocessError) as exc:
             logger.warning("BBDown failed to run: %s", exc)
             return None
