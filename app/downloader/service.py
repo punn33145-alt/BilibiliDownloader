@@ -202,7 +202,12 @@ class DownloadService:
         (interactive QR-code login); BBDown persists that login itself, so
         no credentials are handled here.
         """
-        existing_before = {p.name for p in video_folder.glob("*.mp4")}
+        video_extensions = ("*.mp4", "*.mkv", "*.flv", "*.ts", "*.m4s")
+        existing_before = {
+            f"{p.parent}/{p.name}"
+            for ext in video_extensions
+            for p in video_folder.rglob(ext)
+        }
 
         try:
             if progress_callback:
@@ -253,14 +258,22 @@ class DownloadService:
             )
             return None
 
-        new_mp4s = [
-            p for p in video_folder.glob("*.mp4") if p.name not in existing_before
+        # BBDown may nest output in a subfolder and/or use a container
+        # extension other than .mp4 depending on codec/muxing (e.g. .mkv).
+        # Search recursively across common video extensions rather than
+        # only *.mp4 directly in video_folder, or a successful download
+        # can be missed and silently treated as a failure.
+        new_videos = [
+            p
+            for ext in video_extensions
+            for p in video_folder.rglob(ext)
+            if f"{p.parent}/{p.name}" not in existing_before
         ]
-        if not new_mp4s:
-            logger.warning("BBDown reported success but no new .mp4 was found.")
+        if not new_videos:
+            logger.warning("BBDown reported success but no new video file was found.")
             return None
 
-        return max(new_mp4s, key=lambda p: p.stat().st_mtime)
+        return max(new_videos, key=lambda p: p.stat().st_mtime)
 
     def _make_hook(self, callback: Optional[ProgressCallback]):
         def hook(data: dict[str, Any]) -> None:

@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from typing import Any, Callable, Optional
 
 from pydantic import BaseModel
@@ -57,6 +58,11 @@ _MODEL_CANDIDATES: tuple[str, ...] = (
 # single response (avoids truncation) while still translating a typical
 # video's subtitles in only a handful of requests.
 _CHUNK_SIZE = 150
+
+# Retry config for transient Gemini API errors (503 overloaded, 429 rate
+# limit, brief network issues). Exponential backoff: 3s, 6s, 12s.
+_MAX_RETRIES = 4
+_RETRY_BASE_DELAY_SECONDS = 3
 
 _SYSTEM_PROMPT = (
     "You are a professional Chinese-to-Vietnamese subtitle translator and "
@@ -103,26 +109,48 @@ def _translate_chunk(client: Any, model: str, chunk: list[dict[str, Any]]) -> Op
     from google.genai import types
 
     payload = json.dumps(chunk, ensure_ascii=False)
-    try:
-        response = client.models.generate_content(
-            model=model,
-            contents=payload,
-            config=types.GenerateContentConfig(
-                system_instruction=_SYSTEM_PROMPT,
-                response_mime_type="application/json",
-                # response_schema forces the model into constrained/
-                # controlled decoding that structurally can't produce
-                # invalid JSON (missing quotes, trailing commas, etc.) —
-                # response_mime_type alone is only a hint and can still
-                # occasionally malform, especially with quote characters
-                # inside translated dialogue.
-                response_schema=list[_TranslationItem],
-                temperature=0.3,
-            ),
-        )
-    except Exception as exc:
-        logger.warning("Gemini API call failed: %s", exc)
-        return None
+
+    response = None
+    # Transient server-side errors (503 "high demand", 429 rate limit,
+    # brief network blips) are common with LLM APIs and usually resolve
+    # within seconds — retry a few times with backoff before giving up
+    # and falling all the way back to the offline model, which is much
+    # lower quality for this kind of casual/slang-heavy dialogue.
+    for attempt in range(_MAX_RETRIES):
+        try:
+            response = client.models.generate_content(
+                model=model,
+                contents=payload,
+                config=types.GenerateContentConfig(
+                    system_instruction=_SYSTEM_PROMPT,
+                    response_mime_type="application/json",
+                    # response_schema forces the model into constrained/
+                    # controlled decoding that structurally can't produce
+                    # invalid JSON (missing quotes, trailing commas, etc.) —
+                    # response_mime_type alone is only a hint and can still
+                    # occasionally malform, especially with quote characters
+                    # inside translated dialogue.
+                    response_schema=list[_TranslationItem],
+                    temperature=0.3,
+                ),
+            )
+            break
+        except Exception as exc:
+            if attempt < _MAX_RETRIES - 1:
+                delay = _RETRY_BASE_DELAY_SECONDS * (2**attempt)
+                logger.info(
+                    "Gemini API call failed (attempt %d/%d): %s — retrying in %ds",
+                    attempt + 1,
+                    _MAX_RETRIES,
+                    exc,
+                    delay,
+                )
+                time.sleep(delay)
+            else:
+                logger.warning(
+                    "Gemini API call failed after %d attempts: %s", _MAX_RETRIES, exc
+                )
+                return None
 
     text = getattr(response, "text", None)
     if not text:
