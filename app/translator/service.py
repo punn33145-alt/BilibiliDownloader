@@ -23,6 +23,7 @@ from app.translator.text import (
     distribute_translation_across_group,
     extract_repeated_chinese_terms,
     find_unresolved_cues,
+    format_cue_number_ranges,
     is_confident_translation,
     merge_translation_with_original,
     protect_non_translatable,
@@ -581,19 +582,41 @@ class TranslateService:
         logger.info(message)
 
     @staticmethod
-    def _warn_unresolved_cues(cues: list, output_path) -> None:
+    def _warn_unresolved_cues(cues: list, output_path: Path) -> None:
         """
-        Log exactly which cues still contain Chinese text (translation
-        was skipped for that cue) or leftover placeholder characters —
-        both are very likely to be rejected by TTS tools like CapCut with
-        an "unsupported text" error. Logged (not raised) since the file
-        is still usable; this just tells the person exactly where to look
-        instead of guessing which lines need a manual fix.
+        Log + write a dedicated file listing exactly which cues still
+        contain Chinese text (translation was skipped for that cue, e.g.
+        due to an unstable connection or an odd sentence the model
+        couldn't handle) or leftover placeholder characters. Both are
+        also very likely to be rejected by TTS tools like CapCut with an
+        "unsupported text" error.
+
+        Writes "<video>.untranslated.txt" next to the .vi.srt with a
+        compact range list (e.g. "1-2, 566-600") so the person can find
+        and manually translate exactly those cues without hunting through
+        the whole file.
         """
         unresolved = find_unresolved_cues(cues)
+
+        name = output_path.name
+        suffix = ".vi.srt"
+        base = name[: -len(suffix)] if name.endswith(suffix) else output_path.stem
+        log_path = output_path.parent / f"{base}.untranslated.txt"
+
         if not unresolved:
+            # Clean up a stale report from a previous run of this same
+            # file (e.g. after a manual fix or a successful retranslate),
+            # so an old report doesn't linger and mislead.
+            if log_path.exists():
+                try:
+                    log_path.unlink()
+                except OSError:
+                    pass
             return
-        cue_numbers = ", ".join(str(c.index) for c in unresolved)
+
+        cue_numbers = [c.index for c in unresolved]
+        ranges = format_cue_number_ranges(cue_numbers)
+
         logger.warning(
             "%d cue(s) in %s still contain untranslated/Chinese text or "
             "leftover placeholder characters — these are the lines most "
@@ -601,5 +624,10 @@ class TranslateService:
             "text' error). Cue number(s): %s",
             len(unresolved),
             output_path,
-            cue_numbers,
+            ranges,
         )
+
+        try:
+            log_path.write_text(ranges + "\n", encoding="utf-8")
+        except OSError as exc:
+            logger.warning("Could not write %s: %s", log_path, exc)

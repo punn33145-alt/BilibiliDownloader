@@ -294,6 +294,29 @@ def find_unresolved_cues(cues: list["SubtitleCue"]) -> list["SubtitleCue"]:
     return problems
 
 
+def format_cue_number_ranges(cue_numbers: list[int]) -> str:
+    """
+    Compress a list of cue numbers into compact ranges for a human to
+    scan quickly, e.g. [1, 2, 566, 567, 568, 600] -> "1-2, 566-568, 600".
+    """
+    if not cue_numbers:
+        return ""
+
+    numbers = sorted(set(cue_numbers))
+    ranges: list[str] = []
+    start = prev = numbers[0]
+
+    for n in numbers[1:]:
+        if n == prev + 1:
+            prev = n
+            continue
+        ranges.append(f"{start}-{prev}" if start != prev else str(start))
+        start = prev = n
+
+    ranges.append(f"{start}-{prev}" if start != prev else str(start))
+    return ", ".join(ranges)
+
+
 def strip_placeholder_leftovers(cues: list["SubtitleCue"]) -> list["SubtitleCue"]:
     """
     Defensive cleanup applied right before writing the final subtitle:
