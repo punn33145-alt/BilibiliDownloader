@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import subprocess
+import time
 from pathlib import Path
 from typing import Any, Callable, Optional
 
@@ -185,6 +187,23 @@ class DownloadService:
         except ExtractorError as exc:
             raise self._map_extractor_error(exc) from exc
 
+    @staticmethod
+    def _parse_bbdown_percentage(line: str) -> Optional[float]:
+        """
+        Best-effort extraction of a progress percentage from a line of
+        BBDown output. Looks for any "NN.NN%" / "NN%" pattern rather than
+        depending on BBDown's exact log wording/language, so it keeps
+        working even if that wording changes across versions.
+        """
+        match = re.search(r"(\d{1,3}(?:\.\d+)?)\s*%", line)
+        if not match:
+            return None
+        try:
+            value = float(match.group(1))
+        except ValueError:
+            return None
+        return max(0.0, min(100.0, value))
+
     def _download_with_bbdown(
         self,
         bbdown_path: Path,
@@ -218,43 +237,62 @@ class DownloadService:
                         message="Downloading via BBDown (TV API, no watermark)...",
                     )
                 )
-            result = subprocess.run(
+            # Popen + line-by-line reading (instead of subprocess.run's
+            # capture_output, which blocks silently until the whole
+            # process exits) lets us relay BBDown's own progress output
+            # to the UI as it happens — otherwise the progress bar sits
+            # frozen at 0% for the entire download even though BBDown is
+            # actively working (visible only indirectly via the temp
+            # segment files it creates while multi-thread downloading,
+            # which is on by default).
+            process = subprocess.Popen(
                 [str(bbdown_path), url, "-tv"],
                 cwd=str(video_folder),
-                # If BBDown ever needs interactive input (a quality menu,
-                # or re-login if the saved TV session expired), it would
-                # otherwise hang forever waiting for a keypress that can
-                # never arrive here. Closing stdin makes any such read()
-                # return EOF immediately, so BBDown exits with an error
-                # right away instead of hanging — much better than
-                # silently blocking with no visible reason why.
                 stdin=subprocess.DEVNULL,
-                capture_output=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
                 text=True,
                 encoding="utf-8",
                 errors="replace",
-                # Generous, but bounded — a stuck/hung process (e.g. an
-                # unexpected prompt DEVNULL didn't resolve) should fail
-                # and fall back to yt-dlp well before the person gives up
-                # waiting, rather than blocking for up to 30 minutes.
-                timeout=600,
-                check=False,
+                bufsize=1,
             )
-        except subprocess.TimeoutExpired:
-            logger.warning(
-                "BBDown timed out after 600s (possibly stuck waiting on "
-                "login/input) — falling back to yt-dlp."
-            )
-            return None
+
+            output_lines: list[str] = []
+            start_time = time.monotonic()
+            timeout_seconds = 600
+
+            assert process.stdout is not None
+            for line in process.stdout:
+                output_lines.append(line)
+                if progress_callback:
+                    pct = self._parse_bbdown_percentage(line)
+                    if pct is not None:
+                        progress_callback(
+                            DownloadProgress(
+                                status="downloading",
+                                percentage=pct,
+                                message="Downloading via BBDown (TV API, no watermark)...",
+                            )
+                        )
+                if time.monotonic() - start_time > timeout_seconds:
+                    process.kill()
+                    logger.warning(
+                        "BBDown timed out after %ds (possibly stuck waiting "
+                        "on login/input) — falling back to yt-dlp.",
+                        timeout_seconds,
+                    )
+                    return None
+
+            returncode = process.wait(timeout=30)
         except (OSError, subprocess.SubprocessError) as exc:
             logger.warning("BBDown failed to run: %s", exc)
             return None
 
-        if result.returncode != 0:
+        if returncode != 0:
             logger.warning(
                 "BBDown exited with code %s: %s",
-                result.returncode,
-                (result.stderr or result.stdout or "").strip()[-500:],
+                returncode,
+                "".join(output_lines).strip()[-500:],
             )
             return None
 
