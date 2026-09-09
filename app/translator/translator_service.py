@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from typing import Callable, Optional
 
+from app.dubbing import mux as dubbing_mux
+from app.dubbing import tts as dubbing_tts
 from app.translator.paths_helper import vietnamese_output_path
 from app.translator.providers.base import SubtitleProvider, StatusCallback
 from app.translator.service import TranslateService
+from app.translator.srt import read_srt_file
 from app.translator.subtitle_models import SubtitleContext, TranslatorResult
 
 logger = logging.getLogger(__name__)
@@ -78,13 +82,72 @@ class TranslatorService:
                 error=translation.error or "Translation failed.",
             )
 
+        dubbed_video_path = None
+        if dubbing_tts.is_available() and translation.output_path:
+            dubbed_video_path = self._produce_dubbed_video(
+                context, translation.output_path, progress_callback
+            )
+
         return TranslatorResult(
             success=True,
             chinese_subtitle_path=chinese_path,
             vietnamese_subtitle_path=translation.output_path,
             subtitle_source=source_label,
             model_used=translation.model_used,
+            dubbed_video_path=dubbed_video_path,
         )
+
+    def _produce_dubbed_video(
+        self,
+        context: SubtitleContext,
+        vi_srt_path: Path,
+        progress_callback: Optional[StatusCallback],
+    ) -> Optional[Path]:
+        """
+        Optional final step: generate a Vietnamese voice-over and mux it
+        onto the original video with burned-in subtitles, producing a
+        file ready to upload directly — no manual CapCut step needed.
+        Only runs when edge-tts/pydub are installed (see
+        requirements-tts.txt). Any failure is logged and skipped; the
+        .vi.srt remains the primary deliverable either way.
+        """
+        try:
+            cues = read_srt_file(vi_srt_path)
+            if not cues:
+                return None
+
+            duration = dubbing_mux.get_media_duration_seconds(context.video_path)
+            if duration is None:
+                logger.warning("Could not determine video duration; skipping dubbing.")
+                return None
+
+            audio_path = context.output_dir / f"{context.base_name}.voiceover.mp3"
+            self._notify(progress_callback, "Generating Vietnamese voice-over...")
+            ok = dubbing_tts.generate_dubbed_audio(
+                cues, audio_path, duration, progress_callback=progress_callback
+            )
+            if not ok:
+                logger.warning("Voice-over generation failed; skipping dubbed video.")
+                return None
+
+            dubbed_path = context.output_dir / f"{context.base_name}.dubbed.mp4"
+            self._notify(progress_callback, "Muxing voice-over into video...")
+            ok = dubbing_mux.produce_dubbed_video(
+                video_path=context.video_path,
+                audio_path=audio_path,
+                output_path=dubbed_path,
+                srt_path=vi_srt_path,
+                burn_subtitles=True,
+            )
+            if not ok:
+                logger.warning("Muxing failed; dubbed video not produced.")
+                return None
+
+            self._notify(progress_callback, f"Dubbed video ready: {dubbed_path.name}")
+            return dubbed_path
+        except Exception as exc:
+            logger.warning("Dubbing pipeline failed unexpectedly: %s", exc)
+            return None
 
     @staticmethod
     def _notify(callback: Optional[StatusCallback], message: str) -> None:

@@ -41,3 +41,4 @@ class TranslatorResult:
     subtitle_source: Optional[str] = None
     error: Optional[str] = None
     model_used: Optional[str] = None
+    dubbed_video_path: Optional[Path] = None

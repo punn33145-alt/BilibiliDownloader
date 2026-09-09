@@ -1,0 +1,11 @@
+# Optional: only needed for the automated dubbing feature (generate a
+# Vietnamese voice-over and mux it onto the video, ready to upload —
+# see app/dubbing/). Without these installed, the app works exactly as
+# before: translation still produces the .vi.srt file, dubbing is just
+# skipped.
+#
+# edge-tts: free neural text-to-speech (Microsoft), no API key needed.
+# pydub: places each line's generated speech at its correct timestamp.
+# Both also require ffmpeg, which this project already requires.
+edge-tts>=6.1.0
+pydub>=0.25.0
