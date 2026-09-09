@@ -51,9 +51,10 @@ from app.core.url_validator import extract_url_from_text, is_valid_bilibili_url
 from app.downloader.models import DownloadProgress, DownloadResult, VideoInfo
 from app.downloader.worker import DownloadWorker, InfoWorker
 from app.core.paths import sanitize_filename
-from app.translator.subtitle_models import SubtitleContext, TranslatorResult
-from app.translator.worker import TranslatorWorker
+from app.translator.subtitle_models import DubbingResult, SubtitleContext, TranslatorResult
+from app.translator.worker import DubbingWorker, TranslatorWorker
 from app.ui.styles import DARK_THEME
+from app.ui.subtitle_review_dialog import SubtitleReviewDialog
 
 logger = logging.getLogger(__name__)
 
@@ -71,6 +72,8 @@ class MainWindow(QMainWindow):
         self._info_worker: Optional[InfoWorker] = None
         self._download_worker: Optional[DownloadWorker] = None
         self._translator_worker: Optional[TranslatorWorker] = None
+        self._dubbing_worker: Optional[DubbingWorker] = None
+        self._pending_subtitle_context: Optional[SubtitleContext] = None
         self._last_clipboard_text = ""
         self._last_download_folder: Optional[str] = None
         self._last_download_result: Optional[DownloadResult] = None
@@ -482,6 +485,7 @@ class MainWindow(QMainWindow):
         if not auto:
             self._status_label.setText("Starting automatic subtitle generation...")
 
+        self._pending_subtitle_context = context
         self._translator_worker = TranslatorWorker(context, self)
         self._translator_worker.status.connect(self._on_translator_status)
         self._translator_worker.finished_ok.connect(self._on_translator_finished)
@@ -493,6 +497,30 @@ class MainWindow(QMainWindow):
 
     def _on_translator_finished(self, result: TranslatorResult) -> None:
         self._generate_subtitle_btn.setText("Generate Subtitle (Auto)")
+
+        if result.vietnamese_subtitle_path:
+            dialog = SubtitleReviewDialog(result.vietnamese_subtitle_path, self)
+            accepted = dialog.exec()
+            if not accepted:
+                # "Huỷ" — stop here; the .vi.srt from translation is
+                # still on disk, just no dubbing and no further edits.
+                self._set_controls_enabled(True)
+                self._update_download_enabled()
+                self._status_label.setText("Đã huỷ — giữ nguyên phụ đề đã dịch.")
+                return
+
+            if not dialog.skip_dubbing and self._pending_subtitle_context is not None:
+                from app.dubbing import tts as dubbing_tts
+
+                if dubbing_tts.is_available():
+                    self._start_dubbing(result.vietnamese_subtitle_path)
+                    return
+                # Packages not installed — nothing to dub, fall through
+                # to normal completion below.
+
+        self._finish_translation_workflow(result)
+
+    def _finish_translation_workflow(self, result: TranslatorResult) -> None:
         pending = self._pending_download_result
 
         if pending and result.vietnamese_subtitle_path:
@@ -517,6 +545,48 @@ class MainWindow(QMainWindow):
                 f"Saved: {result.vietnamese_subtitle_path.name}",
             )
             self._open_download_folder(str(result.vietnamese_subtitle_path.parent))
+
+    def _start_dubbing(self, vi_srt_path: Path) -> None:
+        context = self._pending_subtitle_context
+        if context is None:
+            return
+
+        self._set_controls_enabled(False)
+        self._status_label.setText("Đang dựng video (giọng đọc + ghép)...")
+
+        self._dubbing_worker = DubbingWorker(context, vi_srt_path, self)
+        self._dubbing_worker.status.connect(self._on_translator_status)
+        self._dubbing_worker.finished_ok.connect(
+            lambda dubbing_result: self._on_dubbing_finished(dubbing_result, vi_srt_path)
+        )
+        self._dubbing_worker.failed.connect(
+            lambda message: self._on_dubbing_failed(message, vi_srt_path)
+        )
+        self._dubbing_worker.start()
+
+    def _on_dubbing_finished(self, dubbing_result: DubbingResult, vi_srt_path: Path) -> None:
+        if dubbing_result.dubbed_video_path:
+            self._status_label.setText(f"Video ready: {dubbing_result.dubbed_video_path.name}")
+            self._show_notification(
+                "Dubbed Video Ready",
+                f"Saved: {dubbing_result.dubbed_video_path.name}",
+            )
+        translator_result = TranslatorResult(
+            success=True,
+            vietnamese_subtitle_path=vi_srt_path,
+            dubbed_video_path=dubbing_result.dubbed_video_path,
+        )
+        self._finish_translation_workflow(translator_result)
+
+    def _on_dubbing_failed(self, message: str, vi_srt_path: Path) -> None:
+        self._status_label.setText(f"Dựng video thất bại: {message}")
+        QMessageBox.warning(
+            self,
+            "Dựng video thất bại",
+            f"Không dựng được video, nhưng phụ đề tiếng Việt đã lưu thành công:\n\n{message}",
+        )
+        translator_result = TranslatorResult(success=True, vietnamese_subtitle_path=vi_srt_path)
+        self._finish_translation_workflow(translator_result)
 
     def _on_translator_failed(self, message: str) -> None:
         self._generate_subtitle_btn.setText("Generate Subtitle (Auto)")

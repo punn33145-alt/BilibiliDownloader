@@ -10,7 +10,7 @@ from app.translator.factory import create_translator_service
 from app.translator.models import TranslationResult
 from app.translator.paths_helper import vietnamese_output_path
 from app.translator.service import TranslateService
-from app.translator.subtitle_models import SubtitleContext, TranslatorResult
+from app.translator.subtitle_models import DubbingResult, SubtitleContext, TranslatorResult
 
 
 class TranslatorWorker(QThread):
@@ -63,5 +63,40 @@ class TranslateWorker(QThread):
                 self.finished_ok.emit(result)
             else:
                 self.failed.emit(result.error or "Translation failed.")
+        except Exception as exc:
+            self.failed.emit(str(exc))
+
+
+class DubbingWorker(QThread):
+    """
+    Generate a Vietnamese voice-over and mux it onto the video —  run as
+    its own explicit step (not automatically after translation) so the
+    person can review/edit the .vi.srt first via the review dialog.
+    """
+
+    status = Signal(str)
+    finished_ok = Signal(object)  # DubbingResult
+    failed = Signal(str)
+
+    def __init__(self, context: SubtitleContext, vi_srt_path: Path, parent=None) -> None:
+        super().__init__(parent)
+        self._context = context
+        self._vi_srt_path = vi_srt_path
+
+    def run(self) -> None:
+        try:
+            service = create_translator_service()
+            dubbed_path = service.produce_dubbed_video(
+                self._context,
+                self._vi_srt_path,
+                progress_callback=lambda msg: self.status.emit(msg),
+            )
+            if dubbed_path:
+                self.finished_ok.emit(DubbingResult(success=True, dubbed_video_path=dubbed_path))
+            else:
+                self.failed.emit(
+                    "Dubbing failed or the required packages aren't installed "
+                    "(see requirements-tts.txt)."
+                )
         except Exception as exc:
             self.failed.emit(str(exc))

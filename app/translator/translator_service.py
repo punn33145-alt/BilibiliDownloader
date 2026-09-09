@@ -82,31 +82,25 @@ class TranslatorService:
                 error=translation.error or "Translation failed.",
             )
 
-        dubbed_video_path = None
-        if dubbing_tts.is_available() and translation.output_path:
-            dubbed_video_path = self._produce_dubbed_video(
-                context, translation.output_path, progress_callback
-            )
-
         return TranslatorResult(
             success=True,
             chinese_subtitle_path=chinese_path,
             vietnamese_subtitle_path=translation.output_path,
             subtitle_source=source_label,
             model_used=translation.model_used,
-            dubbed_video_path=dubbed_video_path,
         )
 
-    def _produce_dubbed_video(
+    def produce_dubbed_video(
         self,
         context: SubtitleContext,
         vi_srt_path: Path,
-        progress_callback: Optional[StatusCallback],
+        progress_callback: Optional[StatusCallback] = None,
     ) -> Optional[Path]:
         """
-        Optional final step: generate a Vietnamese voice-over and mux it
-        onto the original video with burned-in subtitles, producing a
-        file ready to upload directly — no manual CapCut step needed.
+        Optional final step, called separately (not automatically) after
+        the person has had a chance to review/edit the .vi.srt — generate
+        a Vietnamese voice-over and mux it onto the original video with
+        burned-in subtitles, producing a file ready to upload directly.
         Only runs when edge-tts/pydub are installed (see
         requirements-tts.txt). Any failure is logged and skipped; the
         .vi.srt remains the primary deliverable either way.
