@@ -212,7 +212,7 @@ class DownloadService:
         progress_callback: Optional[ProgressCallback] = None,
     ) -> Optional[Path]:
         """
-        Try downloading via BBDown's TV-API mode (-tv), which avoids the
+        Try downloading via BBDown's TV-API mode (--use-tv-api), which avoids the
         watermark baked into Bilibili's normal web/app API stream. Returns
         the downloaded mp4's path on success, or None on any failure —
         callers should fall back to the standard yt-dlp download.
@@ -246,7 +246,7 @@ class DownloadService:
             # segment files it creates while multi-thread downloading,
             # which is on by default).
             process = subprocess.Popen(
-                [str(bbdown_path), url, "-tv"],
+                [str(bbdown_path), url, "--use-tv-api"],
                 cwd=str(video_folder),
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.PIPE,
